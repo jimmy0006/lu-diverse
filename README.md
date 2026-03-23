@@ -1,6 +1,7 @@
 # lu-diverse
 
 WebGL 게임을 업로드하고 플레이할 수 있는 플랫폼입니다.
+cursor와 sonnet4.6을 사용하여 만들었습니다.
 
 ## 기술 스택
 
