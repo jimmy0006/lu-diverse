@@ -25,11 +25,23 @@ export async function uploadGameZip(
   const zip = new AdmZip(zipBuffer);
   const entries = zip.getEntries();
 
+  const fileEntries = entries.filter((entry) => !entry.isDirectory);
+
+  // zip 내 모든 파일이 동일한 최상위 폴더 아래에 있는지 확인
+  // e.g. GameName/index.html, GameName/Build/... → 최상위 폴더 존재
+  // e.g. index.html, Build/... → 최상위 폴더 없음
+  const topComponents = new Set(
+    fileEntries.map((e) => e.entryName.split('/')[0])
+  );
+  const hasTopLevelFolder =
+    topComponents.size === 1 && fileEntries.every((e) => e.entryName.includes('/'));
+
+  const toRelativePath = (entryName: string) =>
+    hasTopLevelFolder ? entryName.replace(/^[^/]+\//, '') : entryName;
+
   await Promise.all(
-    entries
-      .filter((entry) => !entry.isDirectory)
-      .map(async (entry) => {
-        const key = prefix + entry.entryName.replace(/^[^/]+\//, '');
+    fileEntries.map(async (entry) => {
+        const key = prefix + toRelativePath(entry.entryName);
         const contentType = getContentType(entry.entryName);
         await s3.send(
           new PutObjectCommand({
