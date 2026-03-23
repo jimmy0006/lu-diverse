@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadForGameAndThumbnailFiles",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::lu-diverse-987804819214-ap-northeast-2-an/games/*",
+        "arn:aws:s3:::lu-diverse-987804819214-ap-northeast-2-an/thumbnails/*"
+      ]
+    }
+  ]
+}

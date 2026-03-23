@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import pool from '../db';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth';
-import { uploadGameZip, uploadThumbnail, getPresignedUrl } from '../services/s3Service';
+import { uploadGameZip, uploadThumbnail, getPublicUrl } from '../services/s3Service';
 
 const router = Router();
 const upload = multer({
@@ -52,12 +52,10 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
       search ? [`%${search}%`] : []
     );
 
-    const games = await Promise.all(
-      result.rows.map(async (g) => ({
-        ...g,
-        thumbnail_url: g.thumbnail_s3_key ? await getPresignedUrl(g.thumbnail_s3_key) : null,
-      }))
-    );
+    const games = result.rows.map((g) => ({
+      ...g,
+      thumbnail_url: g.thumbnail_s3_key ? getPublicUrl(g.thumbnail_s3_key) : null,
+    }));
 
     res.json({ games, total: parseInt(countResult.rows[0].count) });
   } catch (err) {
@@ -75,12 +73,10 @@ router.get('/my', requireAuth, async (req: AuthRequest, res: Response): Promise<
        FROM games g WHERE g.user_id = $1 ORDER BY g.created_at DESC`,
       [req.userId]
     );
-    const games = await Promise.all(
-      result.rows.map(async (g) => ({
-        ...g,
-        thumbnail_url: g.thumbnail_s3_key ? await getPresignedUrl(g.thumbnail_s3_key) : null,
-      }))
-    );
+    const games = result.rows.map((g) => ({
+      ...g,
+      thumbnail_url: g.thumbnail_s3_key ? getPublicUrl(g.thumbnail_s3_key) : null,
+    }));
     res.json({ games });
   } catch (err) {
     console.error(err);
@@ -115,12 +111,12 @@ router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promis
     const latestVersion = versionsResult.rows[0];
     let playUrl: string | null = null;
     if (latestVersion) {
-      playUrl = await getPresignedUrl(`${latestVersion.s3_prefix}index.html`);
+      playUrl = getPublicUrl(`${latestVersion.s3_prefix}index.html`);
     }
 
     let thumbnailUrl: string | null = null;
     if (game.thumbnail_s3_key) {
-      thumbnailUrl = await getPresignedUrl(game.thumbnail_s3_key);
+      thumbnailUrl = getPublicUrl(game.thumbnail_s3_key);
     }
 
     let wishlisted = false;

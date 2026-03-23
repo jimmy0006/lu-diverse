@@ -59,7 +59,7 @@ npm run dev
 ```
 
 - 프론트엔드: http://localhost:5173
-- 백엔드 API: http://localhost:4000
+- 백엔드 API: http://localhost:4100
 - PostgreSQL: localhost:5432
 
 ### 2-B. 프로덕션 빌드로 로컬 실행

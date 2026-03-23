@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ludiverse-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ludiverse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ludiverse_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ludiverse}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ludiverse} -d ${POSTGRES_DB:-ludiverse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: node:20-alpine
+    container_name: ludiverse-backend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-ludiverse}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-ludiverse_password}
+      DB_NAME: ${POSTGRES_DB:-ludiverse}
+      NODE_ENV: development
+    ports:
+      - "4100:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_dev_data:

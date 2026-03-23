@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import pool from '../db';
 import { requireAuth, AuthRequest } from '../middleware/auth';
-import { getPresignedUrl } from '../services/s3Service';
+import { getPublicUrl } from '../services/s3Service';
 
 const router = Router();
 
@@ -23,12 +23,10 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response): Promise<vo
       [req.userId]
     );
 
-    const games = await Promise.all(
-      result.rows.map(async (g) => ({
-        ...g,
-        thumbnail_url: g.thumbnail_s3_key ? await getPresignedUrl(g.thumbnail_s3_key) : null,
-      }))
-    );
+    const games = result.rows.map((g) => ({
+      ...g,
+      thumbnail_url: g.thumbnail_s3_key ? getPublicUrl(g.thumbnail_s3_key) : null,
+    }));
 
     res.json({ games });
   } catch (err) {
