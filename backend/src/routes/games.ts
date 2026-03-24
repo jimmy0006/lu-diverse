@@ -3,7 +3,7 @@ import multer from 'multer';
 import pool from '../db';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth';
 import { uploadGameZip, uploadThumbnail, getPublicUrl } from '../services/s3Service';
-import { uploadLimiter } from '../app';
+import { uploadLimiter } from '../middleware/rateLimits';
 
 const router = Router();
 const upload = multer({
