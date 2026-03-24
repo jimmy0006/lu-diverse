@@ -9,10 +9,9 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoggedIn: boolean;
 }
 
@@ -20,44 +19,34 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
 
+  // 페이지 로드 시 서버에서 현재 로그인 상태 복원 (쿠키 기반)
   useEffect(() => {
-    const savedToken = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
-    }
+    api.getMe()
+      .then((res) => setUser(res.data.user))
+      .catch(() => setUser(null));
   }, []);
 
   const login = async (email: string, password: string) => {
     const res = await api.login({ email, password });
-    const { token: t, user: u } = res.data;
-    localStorage.setItem('token', t);
-    localStorage.setItem('user', JSON.stringify(u));
-    setToken(t);
-    setUser(u);
+    setUser(res.data.user);
   };
 
   const register = async (username: string, email: string, password: string) => {
     const res = await api.register({ username, email, password });
-    const { token: t, user: u } = res.data;
-    localStorage.setItem('token', t);
-    localStorage.setItem('user', JSON.stringify(u));
-    setToken(t);
-    setUser(u);
+    setUser(res.data.user);
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setToken(null);
-    setUser(null);
+  const logout = async () => {
+    try {
+      await api.logout();
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, isLoggedIn: !!user }}>
+    <AuthContext.Provider value={{ user, login, register, logout, isLoggedIn: !!user }}>
       {children}
     </AuthContext.Provider>
   );

@@ -2,14 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-});
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  withCredentials: true, // httpOnly 쿠키 자동 전송
 });
 
 // Auth
@@ -18,6 +11,10 @@ export const register = (data: { username: string; email: string; password: stri
 
 export const login = (data: { email: string; password: string }) =>
   api.post('/auth/login', data);
+
+export const logout = () => api.post('/auth/logout');
+
+export const getMe = () => api.get('/auth/me');
 
 // Games
 export const getGames = (params?: { search?: string; sort?: string; page?: number; limit?: number }) =>

@@ -3,12 +3,25 @@ import multer from 'multer';
 import pool from '../db';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth';
 import { uploadGameZip, uploadThumbnail, getPublicUrl } from '../services/s3Service';
+import { uploadLimiter } from '../app';
 
 const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 1024 * 1024 * 1024 }, // 1GB
 });
+
+const SEMVER_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
+const ALLOWED_THUMBNAIL_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+function validateZipFile(file: Express.Multer.File): boolean {
+  return file.mimetype === 'application/zip' || file.originalname.toLowerCase().endsWith('.zip');
+}
+
+function parseId(raw: unknown): number | null {
+  const n = parseInt(raw as string, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function bumpMinorVersion(version: string): string {
   const parts = version.split('.').map(Number);
@@ -21,8 +34,10 @@ function bumpMinorVersion(version: string): string {
 
 // 게임 목록 (검색, 정렬)
 router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { search, sort = 'popular', page = '1', limit = '12' } = req.query as Record<string, string>;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const { search, sort = 'popular' } = req.query as Record<string, string>;
+  const pageRaw = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limitRaw = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 12));
+  const offset = (pageRaw - 1) * limitRaw;
 
   let orderBy = 'g.view_count DESC';
   if (sort === 'latest') orderBy = 'g.created_at DESC';
@@ -31,9 +46,6 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
   const searchCondition = search
     ? `AND (g.title ILIKE $3 OR g.description ILIKE $3)`
     : '';
-  const params: (string | number)[] = [parseInt(limit), offset];
-  if (search) params.push(`%${search}%`);
-
   try {
     const result = await pool.query(
       `SELECT g.id, g.title, g.description, g.current_version, g.thumbnail_s3_key,
@@ -44,7 +56,7 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
        WHERE 1=1 ${searchCondition}
        ORDER BY ${orderBy}
        LIMIT $1 OFFSET $2`,
-      params
+      [limitRaw, offset, ...(search ? [`%${search}%`] : [])]
     );
 
     const countResult = await pool.query(
@@ -86,7 +98,8 @@ router.get('/my', requireAuth, async (req: AuthRequest, res: Response): Promise<
 
 // 게임 상세 + 버전 이력
 router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promise<void> => {
-  const gameId = parseInt(req.params.id as string);
+  const gameId = parseId(req.params.id);
+  if (!gameId) { res.status(400).json({ message: '유효하지 않은 게임 ID입니다.' }); return; }
 
   try {
     await pool.query('UPDATE games SET view_count = view_count + 1 WHERE id = $1', [gameId]);
@@ -144,22 +157,38 @@ router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promis
 router.post(
   '/',
   requireAuth,
+  uploadLimiter,
   upload.fields([
     { name: 'game', maxCount: 1 },
     { name: 'thumbnail', maxCount: 1 },
   ]),
   async (req: AuthRequest, res: Response): Promise<void> => {
-    const { title, description, version = '1.0.0' } = req.body;
+    const { title, description } = req.body;
+    const version: string = req.body.version || '1.0.0';
     const files = req.files as Record<string, Express.Multer.File[]>;
 
-    if (!title || !files.game?.[0]) {
-      res.status(400).json({ message: '게임 제목과 파일은 필수입니다.' });
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      res.status(400).json({ message: '게임 제목은 필수입니다.' });
+      return;
+    }
+    if (!files.game?.[0]) {
+      res.status(400).json({ message: '게임 파일은 필수입니다.' });
+      return;
+    }
+    if (!SEMVER_RE.test(version)) {
+      res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
       return;
     }
 
     const gameFile = files.game[0];
-    if (gameFile.mimetype !== 'application/zip' && !gameFile.originalname.endsWith('.zip')) {
+    if (!validateZipFile(gameFile)) {
       res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' });
+      return;
+    }
+
+    const thumbnailFile = files.thumbnail?.[0];
+    if (thumbnailFile && !ALLOWED_THUMBNAIL_TYPES.includes(thumbnailFile.mimetype)) {
+      res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' });
       return;
     }
 
@@ -172,8 +201,8 @@ router.post(
       const gameId = gameResult.rows[0].id;
 
       let thumbnailKey: string | null = null;
-      if (files.thumbnail?.[0]) {
-        thumbnailKey = await uploadThumbnail(gameId, files.thumbnail[0].buffer, files.thumbnail[0].mimetype);
+      if (thumbnailFile) {
+        thumbnailKey = await uploadThumbnail(gameId, thumbnailFile.buffer, thumbnailFile.mimetype);
         await pool.query('UPDATE games SET thumbnail_s3_key = $1 WHERE id = $2', [thumbnailKey, gameId]);
       }
 
@@ -195,12 +224,14 @@ router.post(
 router.patch(
   '/:id',
   requireAuth,
+  uploadLimiter,
   upload.fields([
     { name: 'game', maxCount: 1 },
     { name: 'thumbnail', maxCount: 1 },
   ]),
   async (req: AuthRequest, res: Response): Promise<void> => {
-    const gameId = parseInt(req.params.id as string);
+    const gameId = parseId(req.params.id);
+    if (!gameId) { res.status(400).json({ message: '유효하지 않은 게임 ID입니다.' }); return; }
 
     try {
       const gameResult = await pool.query(
@@ -219,6 +250,23 @@ router.patch(
       const currentVersion: string = gameResult.rows[0].current_version;
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { description, version } = req.body;
+
+      if (version && !SEMVER_RE.test(version)) {
+        res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
+        return;
+      }
+
+      // zip 파일 검증 (게임 파일이 있을 때만)
+      if (files?.game?.[0] && !validateZipFile(files.game[0])) {
+        res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' });
+        return;
+      }
+
+      // 썸네일 타입 검증
+      if (files?.thumbnail?.[0] && !ALLOWED_THUMBNAIL_TYPES.includes(files.thumbnail[0].mimetype)) {
+        res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' });
+        return;
+      }
 
       const newVersion = version || bumpMinorVersion(currentVersion);
 

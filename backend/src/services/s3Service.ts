@@ -21,11 +21,33 @@ export async function uploadGameZip(
   version: string,
   zipBuffer: Buffer
 ): Promise<string> {
+  const MAX_FILES = 500;
+  const MAX_UNCOMPRESSED_BYTES = 3 * 1024 * 1024 * 1024; // 3GB
+
   const prefix = `games/${gameId}/${version}/`;
   const zip = new AdmZip(zipBuffer);
   const entries = zip.getEntries();
 
   const fileEntries = entries.filter((entry) => !entry.isDirectory);
+
+  // zip-bomb 방어: 파일 수 제한
+  if (fileEntries.length > MAX_FILES) {
+    throw new Error(`zip 파일 내 파일 수가 ${MAX_FILES}개를 초과합니다.`);
+  }
+
+  // zip-bomb 방어: 압축 해제 후 총 크기 제한
+  const totalUncompressed = fileEntries.reduce((sum, e) => sum + e.header.size, 0);
+  if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) {
+    throw new Error('압축 해제 후 크기가 3GB를 초과합니다.');
+  }
+
+  // 경로 순회 공격 차단: .. 또는 절대경로 포함 항목 거부
+  for (const entry of fileEntries) {
+    const normalized = entry.entryName.replace(/\\/g, '/');
+    if (normalized.includes('../') || normalized.startsWith('/')) {
+      throw new Error(`허용되지 않는 파일 경로: ${entry.entryName}`);
+    }
+  }
 
   // zip 내 모든 파일이 동일한 최상위 폴더 아래에 있는지 확인
   // e.g. GameName/index.html, GameName/Build/... → 최상위 폴더 존재
@@ -39,20 +61,19 @@ export async function uploadGameZip(
   const toRelativePath = (entryName: string) =>
     hasTopLevelFolder ? entryName.replace(/^[^/]+\//, '') : entryName;
 
-  await Promise.all(
-    fileEntries.map(async (entry) => {
-        const key = prefix + toRelativePath(entry.entryName);
-        const contentType = getContentType(entry.entryName);
-        await s3.send(
-          new PutObjectCommand({
-            Bucket: BUCKET,
-            Key: key,
-            Body: entry.getData(),
-            ContentType: contentType,
-          })
-        );
+  // 순차 업로드로 메모리 사용 제한
+  for (const entry of fileEntries) {
+    const key = prefix + toRelativePath(entry.entryName);
+    const contentType = getContentType(entry.entryName);
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: entry.getData(),
+        ContentType: contentType,
       })
-  );
+    );
+  }
 
   return prefix;
 }
