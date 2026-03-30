@@ -10,10 +10,19 @@ const RESOLUTION_PRESETS = [
   { label: '1024×768', w: 1024, h: 768 },
 ];
 
+const OS_LIST = [
+  { key: 'windows' as const, label: 'Windows', icon: '🪟' },
+  { key: 'mac' as const, label: 'macOS', icon: '🍎' },
+  { key: 'linux' as const, label: 'Linux', icon: '🐧' },
+];
+
+type OsKey = 'windows' | 'mac' | 'linux';
+
 interface Game {
   id: number;
   title: string;
   description: string;
+  game_type: 'webgl' | 'build';
   current_version: string;
   thumbnail_url: string | null;
   view_count: number;
@@ -30,6 +39,7 @@ interface UpdateForm {
   thumbnail: File | null;
   nativeW: string;
   nativeH: string;
+  buildFiles: Partial<Record<OsKey, File>>;
 }
 
 export default function MyGames() {
@@ -37,7 +47,9 @@ export default function MyGames() {
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState<UpdateForm>({ description: '', version: '', gameFile: null, thumbnail: null, nativeW: '', nativeH: '' });
+  const [form, setForm] = useState<UpdateForm>({
+    description: '', version: '', gameFile: null, thumbnail: null, nativeW: '', nativeH: '', buildFiles: {},
+  });
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
 
@@ -57,21 +69,37 @@ export default function MyGames() {
       thumbnail: null,
       nativeW: game.native_width ? String(game.native_width) : '',
       nativeH: game.native_height ? String(game.native_height) : '',
+      buildFiles: {},
     });
     setUpdateError('');
   };
 
-  const handleUpdate = async (gameId: number) => {
+  const setBuildFile = (os: OsKey, file: File | null) => {
+    setForm((f) => {
+      const next = { ...f.buildFiles };
+      if (file) next[os] = file;
+      else delete next[os];
+      return { ...f, buildFiles: next };
+    });
+  };
+
+  const handleUpdate = async (gameId: number, gameType: 'webgl' | 'build') => {
     setUpdating(true);
     setUpdateError('');
     const fd = new FormData();
     if (form.description) fd.append('description', form.description);
     if (form.version) fd.append('version', form.version);
-    if (form.gameFile) fd.append('game', form.gameFile);
     if (form.thumbnail) fd.append('thumbnail', form.thumbnail);
-    // 빈 문자열이면 null(초기화)로, 값이 있으면 해당 값으로 전송
-    fd.append('native_width', form.nativeW);
-    fd.append('native_height', form.nativeH);
+
+    if (gameType === 'webgl') {
+      if (form.gameFile) fd.append('game', form.gameFile);
+      fd.append('native_width', form.nativeW);
+      fd.append('native_height', form.nativeH);
+    } else {
+      (Object.entries(form.buildFiles) as [OsKey, File][]).forEach(([os, file]) => {
+        fd.append(`${os}_file`, file);
+      });
+    }
 
     try {
       await updateGame(gameId, fd);
@@ -122,30 +150,28 @@ export default function MyGames() {
             <div key={game.id} className="bg-gray-800 rounded-xl p-5">
               <div className="flex gap-4">
                 {game.thumbnail_url && (
-                  <img
-                    src={game.thumbnail_url}
-                    alt={game.title}
-                    className="w-24 h-16 object-cover rounded-lg shrink-0"
-                  />
+                  <img src={game.thumbnail_url} alt={game.title} className="w-24 h-16 object-cover rounded-lg shrink-0" />
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <Link
-                        to={`/game/${game.id}`}
-                        className="text-white font-semibold hover:text-indigo-400 transition"
-                      >
-                        {game.title}
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link to={`/game/${game.id}`} className="text-white font-semibold hover:text-indigo-400 transition">
+                          {game.title}
+                        </Link>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          game.game_type === 'webgl' ? 'bg-indigo-700 text-indigo-200' : 'bg-emerald-700 text-emerald-200'
+                        }`}>
+                          {game.game_type === 'webgl' ? 'WebGL' : 'Download'}
+                        </span>
+                      </div>
                       <p className="text-gray-500 text-xs mt-0.5">
                         v{game.current_version} · {new Date(game.updated_at).toLocaleDateString('ko-KR')} 업데이트
                       </p>
                     </div>
-                    <div className="flex gap-2 shrink-0">
-                      <div className="text-xs text-gray-500 flex gap-2">
-                        <span>👁 {game.view_count}</span>
-                        <span>🤍 {game.wishlist_count}</span>
-                      </div>
+                    <div className="text-xs text-gray-500 flex gap-2 shrink-0">
+                      <span>👁 {game.view_count}</span>
+                      <span>🤍 {game.wishlist_count}</span>
                     </div>
                   </div>
                   <p className="text-gray-400 text-sm mt-2 line-clamp-2">{game.description}</p>
@@ -160,6 +186,7 @@ export default function MyGames() {
 
               {editingId === game.id && (
                 <div className="mt-4 pt-4 border-t border-gray-700 flex flex-col gap-3">
+                  {/* 설명 */}
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">설명 수정</label>
                     <textarea
@@ -169,26 +196,17 @@ export default function MyGames() {
                       className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500 resize-none"
                     />
                   </div>
+
+                  {/* 버전 & 썸네일 */}
                   <div className="flex gap-3 flex-wrap">
                     <div className="flex-1 min-w-32">
-                      <label className="block text-xs text-gray-400 mb-1">
-                        새 버전 (비워두면 마이너 +1)
-                      </label>
+                      <label className="block text-xs text-gray-400 mb-1">새 버전 (비워두면 마이너 +1)</label>
                       <input
                         type="text"
                         value={form.version}
                         onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))}
                         placeholder="예: 1.2.0"
                         className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-32">
-                      <label className="block text-xs text-gray-400 mb-1">새 게임 파일 (zip)</label>
-                      <input
-                        type="file"
-                        accept=".zip"
-                        onChange={(e) => setForm((f) => ({ ...f, gameFile: e.target.files?.[0] || null }))}
-                        className="w-full text-sm text-gray-400"
                       />
                     </div>
                     <div className="flex-1 min-w-32">
@@ -202,61 +220,106 @@ export default function MyGames() {
                     </div>
                   </div>
 
-                  {/* 해상도 수정 */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1.5">
-                      원본 해상도
-                      <span className="text-gray-600 ml-1">(비워두면 기존 값 유지)</span>
-                    </label>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {RESOLUTION_PRESETS.map((p) => (
-                        <button
-                          key={p.label}
-                          type="button"
-                          onClick={() => setForm((f) => ({ ...f, nativeW: String(p.w), nativeH: String(p.h) }))}
-                          className={`text-xs px-2.5 py-1 rounded-lg border transition ${
-                            form.nativeW === String(p.w) && form.nativeH === String(p.h)
-                              ? 'border-indigo-500 bg-indigo-900/50 text-indigo-300'
-                              : 'border-gray-600 text-gray-400 hover:border-gray-500'
-                          }`}
-                        >
-                          {p.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        value={form.nativeW}
-                        onChange={(e) => setForm((f) => ({ ...f, nativeW: e.target.value }))}
-                        min={1}
-                        placeholder="가로"
-                        className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
-                      />
-                      <span className="text-gray-500 text-sm">×</span>
-                      <input
-                        type="number"
-                        value={form.nativeH}
-                        onChange={(e) => setForm((f) => ({ ...f, nativeH: e.target.value }))}
-                        min={1}
-                        placeholder="세로"
-                        className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                  </div>
-
-                  {updateError && (
-                    <p className="text-red-400 text-sm">{updateError}</p>
+                  {/* WebGL 전용: 게임 파일 + 해상도 */}
+                  {game.game_type === 'webgl' && (
+                    <>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">새 게임 파일 (zip)</label>
+                        <input
+                          type="file"
+                          accept=".zip"
+                          onChange={(e) => setForm((f) => ({ ...f, gameFile: e.target.files?.[0] || null }))}
+                          className="w-full text-sm text-gray-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1.5">
+                          원본 해상도
+                          {game.native_width && game.native_height && (
+                            <span className="text-gray-600 ml-1">
+                              (현재 {game.native_width} × {game.native_height})
+                            </span>
+                          )}
+                        </label>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {RESOLUTION_PRESETS.map((p) => (
+                            <button
+                              key={p.label}
+                              type="button"
+                              onClick={() => setForm((f) => ({ ...f, nativeW: String(p.w), nativeH: String(p.h) }))}
+                              className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                                form.nativeW === String(p.w) && form.nativeH === String(p.h)
+                                  ? 'border-indigo-500 bg-indigo-900/50 text-indigo-300'
+                                  : 'border-gray-600 text-gray-400 hover:border-gray-500'
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={form.nativeW}
+                            onChange={(e) => setForm((f) => ({ ...f, nativeW: e.target.value }))}
+                            min={1}
+                            placeholder="가로"
+                            className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-gray-500 text-sm">×</span>
+                          <input
+                            type="number"
+                            value={form.nativeH}
+                            onChange={(e) => setForm((f) => ({ ...f, nativeH: e.target.value }))}
+                            min={1}
+                            placeholder="세로"
+                            className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+                    </>
                   )}
 
+                  {/* Build 전용: OS별 파일 */}
+                  {game.game_type === 'build' && (
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">OS별 빌드 파일 교체</label>
+                      <div className="flex flex-col gap-2">
+                        {OS_LIST.map(({ key, label, icon }) => (
+                          <div key={key} className="flex items-center gap-3 bg-gray-700/50 rounded-lg px-3 py-2">
+                            <span>{icon}</span>
+                            <span className="text-sm text-gray-300 w-16">{label}</span>
+                            <div className="flex-1 text-xs text-gray-500">
+                              {form.buildFiles[key] ? form.buildFiles[key]!.name : '파일 미선택'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => document.getElementById(`edit-build-${key}`)?.click()}
+                              className="text-xs px-2.5 py-1 rounded-lg border border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200 transition"
+                            >
+                              선택
+                            </button>
+                            <input
+                              id={`edit-build-${key}`}
+                              type="file"
+                              accept=".zip"
+                              className="hidden"
+                              onChange={(e) => setBuildFile(key, e.target.files?.[0] || null)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {updateError && <p className="text-red-400 text-sm">{updateError}</p>}
+
                   <button
-                    onClick={() => handleUpdate(game.id)}
+                    onClick={() => handleUpdate(game.id, game.game_type)}
                     disabled={updating}
                     className="self-end bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm px-5 py-2 rounded-lg transition flex items-center gap-2"
                   >
-                    {updating && (
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    )}
+                    {updating && <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                     업데이트
                   </button>
                 </div>

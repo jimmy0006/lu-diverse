@@ -4,12 +4,15 @@ export interface Game {
   id: number;
   title: string;
   description: string;
+  game_type: 'webgl' | 'build';
   current_version: string;
   thumbnail_url: string | null;
   view_count: number;
   wishlist_count: number;
   uploader?: string;
   updated_at: string;
+  native_width?: number | null;
+  native_height?: number | null;
 }
 
 export default function GameCard({ game }: { game: Game }) {
@@ -18,7 +21,7 @@ export default function GameCard({ game }: { game: Game }) {
       to={`/game/${game.id}`}
       className="bg-gray-800 rounded-xl overflow-hidden hover:ring-2 hover:ring-indigo-500 transition group flex flex-col"
     >
-      <div className="aspect-video bg-gray-700 overflow-hidden">
+      <div className="aspect-video bg-gray-700 overflow-hidden relative">
         {game.thumbnail_url ? (
           <img
             src={game.thumbnail_url}
@@ -30,6 +33,13 @@ export default function GameCard({ game }: { game: Game }) {
             🎮
           </div>
         )}
+        <span className={`absolute top-2 left-2 text-xs font-bold px-2 py-0.5 rounded-full ${
+          game.game_type === 'webgl'
+            ? 'bg-indigo-600 text-white'
+            : 'bg-emerald-600 text-white'
+        }`}>
+          {game.game_type === 'webgl' ? 'WebGL' : 'Download'}
+        </span>
       </div>
       <div className="p-4 flex flex-col gap-1 flex-1">
         <h3 className="text-white font-semibold text-base leading-tight line-clamp-1">{game.title}</h3>

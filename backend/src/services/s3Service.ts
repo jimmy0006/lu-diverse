@@ -3,7 +3,9 @@ import {
   PutObjectCommand,
   DeleteObjectsCommand,
   ListObjectsV2Command,
+  GetObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import AdmZip from 'adm-zip';
 
 const s3 = new S3Client({
@@ -105,6 +107,45 @@ export function getPublicUrl(key: string): string {
   const region = process.env.AWS_REGION!;
   const bucket = BUCKET;
   return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+}
+
+/**
+ * OS 빌드 파일(zip)을 그대로 S3에 업로드합니다.
+ * WebGL과 달리 압축을 풀지 않고 단일 파일로 저장합니다.
+ */
+export async function uploadBuildFile(
+  gameId: number,
+  os: string,
+  buffer: Buffer,
+  originalFilename: string
+): Promise<string> {
+  const key = `builds/${gameId}/${os}/${originalFilename}`;
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: 'application/zip',
+      ContentDisposition: `attachment; filename="${originalFilename}"`,
+    })
+  );
+  return key;
+}
+
+/**
+ * 빌드 파일 다운로드용 Presigned URL을 생성합니다 (1시간 유효).
+ * builds/* 는 공개 접근이 아닌 서명된 URL로만 접근합니다.
+ */
+export async function getPresignedDownloadUrl(key: string, filename: string): Promise<string> {
+  return getSignedUrl(
+    s3,
+    new GetObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      ResponseContentDisposition: `attachment; filename="${filename}"`,
+    }),
+    { expiresIn: 3600 }
+  );
 }
 
 export async function deleteGameFiles(prefix: string): Promise<void> {

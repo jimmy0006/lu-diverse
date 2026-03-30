@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lu-diverse
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/jimmy0006/lu-diverse
+    targetRevision: master
+    path: k8s
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lu-diverse
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

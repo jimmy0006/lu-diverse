@@ -2,7 +2,13 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import pool from '../db';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth';
-import { uploadGameZip, uploadThumbnail, getPublicUrl } from '../services/s3Service';
+import {
+  uploadGameZip,
+  uploadBuildFile,
+  uploadThumbnail,
+  getPublicUrl,
+  getPresignedDownloadUrl,
+} from '../services/s3Service';
 import { uploadLimiter } from '../middleware/rateLimits';
 
 const router = Router();
@@ -13,6 +19,8 @@ const upload = multer({
 
 const SEMVER_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 const ALLOWED_THUMBNAIL_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const SUPPORTED_OS = ['windows', 'mac', 'linux'] as const;
+type OS = typeof SUPPORTED_OS[number];
 
 function validateZipFile(file: Express.Multer.File): boolean {
   return file.mimetype === 'application/zip' || file.originalname.toLowerCase().endsWith('.zip');
@@ -25,16 +33,20 @@ function parseId(raw: unknown): number | null {
 
 function bumpMinorVersion(version: string): string {
   const parts = version.split('.').map(Number);
-  if (parts.length === 3) {
-    parts[2] += 1;
-    return parts.join('.');
-  }
+  if (parts.length === 3) { parts[2] += 1; return parts.join('.'); }
   return '1.0.1';
 }
 
-// 게임 목록 (검색, 정렬)
+function parseOptionalInt(val: string | undefined): number | null | undefined {
+  if (val === undefined) return undefined;
+  if (val === '') return null;
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+// ─── 게임 목록 ───────────────────────────────────────────────────────────────
 router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { search, sort = 'popular' } = req.query as Record<string, string>;
+  const { search, sort = 'popular', game_type } = req.query as Record<string, string>;
   const pageRaw = Math.max(1, parseInt(req.query.page as string) || 1);
   const limitRaw = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 12));
   const offset = (pageRaw - 1) * limitRaw;
@@ -43,25 +55,36 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
   if (sort === 'latest') orderBy = 'g.created_at DESC';
   if (sort === 'wishlist') orderBy = 'g.wishlist_count DESC';
 
-  const searchCondition = search
-    ? `AND (g.title ILIKE $3 OR g.description ILIKE $3)`
-    : '';
+  const conditions: string[] = [];
+  const params: (string | number)[] = [limitRaw, offset];
+
+  if (game_type === 'webgl' || game_type === 'build') {
+    conditions.push(`g.game_type = $${params.length + 1}`);
+    params.push(game_type);
+  }
+  if (search) {
+    conditions.push(`(g.title ILIKE $${params.length + 1} OR g.description ILIKE $${params.length + 1})`);
+    params.push(`%${search}%`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
   try {
     const result = await pool.query(
-      `SELECT g.id, g.title, g.description, g.current_version, g.thumbnail_s3_key,
-              g.view_count, g.wishlist_count, g.created_at, g.updated_at,
+      `SELECT g.id, g.title, g.description, g.game_type, g.current_version, g.thumbnail_s3_key,
+              g.native_width, g.native_height, g.view_count, g.wishlist_count, g.created_at, g.updated_at,
               u.username AS uploader
-       FROM games g
-       JOIN users u ON g.user_id = u.id
-       WHERE 1=1 ${searchCondition}
+       FROM games g JOIN users u ON g.user_id = u.id
+       ${whereClause}
        ORDER BY ${orderBy}
        LIMIT $1 OFFSET $2`,
-      [limitRaw, offset, ...(search ? [`%${search}%`] : [])]
+      params
     );
 
+    const countParams = params.slice(2);
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM games g WHERE 1=1 ${search ? `AND (g.title ILIKE $1 OR g.description ILIKE $1)` : ''}`,
-      search ? [`%${search}%`] : []
+      `SELECT COUNT(*) FROM games g ${whereClause.replace('LIMIT $1 OFFSET $2', '')}`,
+      countParams
     );
 
     const games = result.rows.map((g) => ({
@@ -76,12 +99,12 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
   }
 });
 
-// 내 게임 목록
+// ─── 내 게임 목록 ─────────────────────────────────────────────────────────────
 router.get('/my', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT g.id, g.title, g.description, g.current_version, g.thumbnail_s3_key,
-              g.view_count, g.wishlist_count, g.created_at, g.updated_at
+      `SELECT g.id, g.title, g.description, g.game_type, g.current_version, g.thumbnail_s3_key,
+              g.native_width, g.native_height, g.view_count, g.wishlist_count, g.created_at, g.updated_at
        FROM games g WHERE g.user_id = $1 ORDER BY g.created_at DESC`,
       [req.userId]
     );
@@ -96,7 +119,33 @@ router.get('/my', requireAuth, async (req: AuthRequest, res: Response): Promise<
   }
 });
 
-// 게임 상세 + 버전 이력
+// ─── 빌드 파일 다운로드 Presigned URL ─────────────────────────────────────────
+router.get('/:id/download/:os', async (req, res: Response): Promise<void> => {
+  const gameId = parseId(req.params.id);
+  const os = req.params.os as OS;
+
+  if (!gameId) { res.status(400).json({ message: '유효하지 않은 게임 ID입니다.' }); return; }
+  if (!SUPPORTED_OS.includes(os)) { res.status(400).json({ message: '지원하지 않는 OS입니다.' }); return; }
+
+  try {
+    const result = await pool.query(
+      'SELECT s3_key, original_filename FROM game_builds WHERE game_id = $1 AND os = $2',
+      [gameId, os]
+    );
+    if (!result.rows.length) {
+      res.status(404).json({ message: `${os} 빌드 파일이 없습니다.` });
+      return;
+    }
+    const { s3_key, original_filename } = result.rows[0];
+    const url = await getPresignedDownloadUrl(s3_key, original_filename);
+    res.json({ url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// ─── 게임 상세 ────────────────────────────────────────────────────────────────
 router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   const gameId = parseId(req.params.id);
   if (!gameId) { res.status(400).json({ message: '유효하지 않은 게임 ID입니다.' }); return; }
@@ -105,32 +154,28 @@ router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promis
     await pool.query('UPDATE games SET view_count = view_count + 1 WHERE id = $1', [gameId]);
 
     const result = await pool.query(
-      `SELECT g.*, u.username AS uploader
-       FROM games g JOIN users u ON g.user_id = u.id
-       WHERE g.id = $1`,
+      `SELECT g.*, u.username AS uploader FROM games g JOIN users u ON g.user_id = u.id WHERE g.id = $1`,
       [gameId]
     );
-    if (!result.rows.length) {
-      res.status(404).json({ message: '게임을 찾을 수 없습니다.' });
-      return;
-    }
+    if (!result.rows.length) { res.status(404).json({ message: '게임을 찾을 수 없습니다.' }); return; }
 
     const game = result.rows[0];
+
+    // WebGL: 버전 이력 + play URL
     const versionsResult = await pool.query(
       'SELECT id, version, s3_prefix, created_at FROM game_versions WHERE game_id = $1 ORDER BY created_at DESC',
       [gameId]
     );
-
     const latestVersion = versionsResult.rows[0];
-    let playUrl: string | null = null;
-    if (latestVersion) {
-      playUrl = getPublicUrl(`${latestVersion.s3_prefix}index.html`);
-    }
+    const playUrl = latestVersion ? getPublicUrl(`${latestVersion.s3_prefix}index.html`) : null;
 
-    let thumbnailUrl: string | null = null;
-    if (game.thumbnail_s3_key) {
-      thumbnailUrl = getPublicUrl(game.thumbnail_s3_key);
-    }
+    // Build: OS별 빌드 파일 목록
+    const buildsResult = await pool.query(
+      'SELECT os, file_size, original_filename FROM game_builds WHERE game_id = $1 ORDER BY os',
+      [gameId]
+    );
+
+    const thumbnailUrl = game.thumbnail_s3_key ? getPublicUrl(game.thumbnail_s3_key) : null;
 
     let wishlisted = false;
     if (req.userId) {
@@ -144,7 +189,8 @@ router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promis
     res.json({
       game: { ...game, thumbnail_url: thumbnailUrl },
       versions: versionsResult.rows,
-      play_url: playUrl,
+      play_url: game.game_type === 'webgl' ? playUrl : null,
+      builds: buildsResult.rows,
       wishlisted,
     });
   } catch (err) {
@@ -153,7 +199,7 @@ router.get('/:id', optionalAuth, async (req: AuthRequest, res: Response): Promis
   }
 });
 
-// 게임 업로드
+// ─── 게임 업로드 ──────────────────────────────────────────────────────────────
 router.post(
   '/',
   requireAuth,
@@ -161,67 +207,71 @@ router.post(
   upload.fields([
     { name: 'game', maxCount: 1 },
     { name: 'thumbnail', maxCount: 1 },
+    { name: 'windows_file', maxCount: 1 },
+    { name: 'mac_file', maxCount: 1 },
+    { name: 'linux_file', maxCount: 1 },
   ]),
   async (req: AuthRequest, res: Response): Promise<void> => {
     const { title, description } = req.body;
     const version: string = req.body.version || '1.0.0';
+    const gameType: string = req.body.game_type === 'build' ? 'build' : 'webgl';
     const files = req.files as Record<string, Express.Multer.File[]>;
 
     const nativeWidth = req.body.native_width ? parseInt(req.body.native_width, 10) : null;
     const nativeHeight = req.body.native_height ? parseInt(req.body.native_height, 10) : null;
 
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
-      res.status(400).json({ message: '게임 제목은 필수입니다.' });
-      return;
-    }
-    if (!files.game?.[0]) {
-      res.status(400).json({ message: '게임 파일은 필수입니다.' });
-      return;
+      res.status(400).json({ message: '게임 제목은 필수입니다.' }); return;
     }
     if (!SEMVER_RE.test(version)) {
-      res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
-      return;
-    }
-    if (nativeWidth !== null && (isNaN(nativeWidth) || nativeWidth <= 0)) {
-      res.status(400).json({ message: '가로 해상도가 올바르지 않습니다.' });
-      return;
-    }
-    if (nativeHeight !== null && (isNaN(nativeHeight) || nativeHeight <= 0)) {
-      res.status(400).json({ message: '세로 해상도가 올바르지 않습니다.' });
-      return;
+      res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' }); return;
     }
 
-    const gameFile = files.game[0];
-    if (!validateZipFile(gameFile)) {
-      res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' });
-      return;
-    }
-
-    const thumbnailFile = files.thumbnail?.[0];
+    const thumbnailFile = files?.thumbnail?.[0];
     if (thumbnailFile && !ALLOWED_THUMBNAIL_TYPES.includes(thumbnailFile.mimetype)) {
-      res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' });
-      return;
+      res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' }); return;
+    }
+
+    if (gameType === 'webgl') {
+      if (!files?.game?.[0]) { res.status(400).json({ message: 'WebGL zip 파일은 필수입니다.' }); return; }
+      if (!validateZipFile(files.game[0])) { res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' }); return; }
+    } else {
+      const hasAnyBuild = SUPPORTED_OS.some((os) => files?.[`${os}_file`]?.[0]);
+      if (!hasAnyBuild) { res.status(400).json({ message: '최소 하나의 OS 빌드 파일을 업로드해야 합니다.' }); return; }
     }
 
     try {
       const gameResult = await pool.query(
-        `INSERT INTO games (user_id, title, description, current_version, native_width, native_height)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [req.userId, title, description, version, nativeWidth, nativeHeight]
+        `INSERT INTO games (user_id, title, description, game_type, current_version, native_width, native_height)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [req.userId, title, description, gameType, version, nativeWidth, nativeHeight]
       );
       const gameId = gameResult.rows[0].id;
 
-      let thumbnailKey: string | null = null;
       if (thumbnailFile) {
-        thumbnailKey = await uploadThumbnail(gameId, thumbnailFile.buffer, thumbnailFile.mimetype);
+        const thumbnailKey = await uploadThumbnail(gameId, thumbnailFile.buffer, thumbnailFile.mimetype);
         await pool.query('UPDATE games SET thumbnail_s3_key = $1 WHERE id = $2', [thumbnailKey, gameId]);
       }
 
-      const s3Prefix = await uploadGameZip(gameId, version, gameFile.buffer);
-      await pool.query(
-        'INSERT INTO game_versions (game_id, version, s3_prefix) VALUES ($1, $2, $3)',
-        [gameId, version, s3Prefix]
-      );
+      if (gameType === 'webgl') {
+        const s3Prefix = await uploadGameZip(gameId, version, files.game[0].buffer);
+        await pool.query(
+          'INSERT INTO game_versions (game_id, version, s3_prefix) VALUES ($1, $2, $3)',
+          [gameId, version, s3Prefix]
+        );
+      } else {
+        for (const os of SUPPORTED_OS) {
+          const f = files?.[`${os}_file`]?.[0];
+          if (!f) continue;
+          const s3Key = await uploadBuildFile(gameId, os, f.buffer, f.originalname);
+          await pool.query(
+            `INSERT INTO game_builds (game_id, os, s3_key, file_size, original_filename)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (game_id, os) DO UPDATE SET s3_key=$3, file_size=$4, original_filename=$5`,
+            [gameId, os, s3Key, f.size, f.originalname]
+          );
+        }
+      }
 
       res.status(201).json({ message: '업로드 완료', gameId });
     } catch (err) {
@@ -231,7 +281,7 @@ router.post(
   }
 );
 
-// 게임 업데이트
+// ─── 게임 업데이트 ────────────────────────────────────────────────────────────
 router.patch(
   '/:id',
   requireAuth,
@@ -239,6 +289,9 @@ router.patch(
   upload.fields([
     { name: 'game', maxCount: 1 },
     { name: 'thumbnail', maxCount: 1 },
+    { name: 'windows_file', maxCount: 1 },
+    { name: 'mac_file', maxCount: 1 },
+    { name: 'linux_file', maxCount: 1 },
   ]),
   async (req: AuthRequest, res: Response): Promise<void> => {
     const gameId = parseId(req.params.id);
@@ -246,75 +299,37 @@ router.patch(
 
     try {
       const gameResult = await pool.query(
-        'SELECT user_id, current_version FROM games WHERE id = $1',
+        'SELECT user_id, current_version, game_type FROM games WHERE id = $1',
         [gameId]
       );
-      if (!gameResult.rows.length) {
-        res.status(404).json({ message: '게임을 찾을 수 없습니다.' });
-        return;
-      }
-      if (gameResult.rows[0].user_id !== req.userId) {
-        res.status(403).json({ message: '권한이 없습니다.' });
-        return;
-      }
+      if (!gameResult.rows.length) { res.status(404).json({ message: '게임을 찾을 수 없습니다.' }); return; }
+      if (gameResult.rows[0].user_id !== req.userId) { res.status(403).json({ message: '권한이 없습니다.' }); return; }
 
       const currentVersion: string = gameResult.rows[0].current_version;
+      const gameType: string = gameResult.rows[0].game_type;
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { description, version } = req.body;
 
-      const nativeWidth = req.body.native_width !== undefined
-        ? (req.body.native_width === '' ? null : parseInt(req.body.native_width, 10))
-        : undefined;
-      const nativeHeight = req.body.native_height !== undefined
-        ? (req.body.native_height === '' ? null : parseInt(req.body.native_height, 10))
-        : undefined;
-
-      if (nativeWidth !== undefined && nativeWidth !== null && (isNaN(nativeWidth) || nativeWidth <= 0)) {
-        res.status(400).json({ message: '가로 해상도가 올바르지 않습니다.' });
-        return;
-      }
-      if (nativeHeight !== undefined && nativeHeight !== null && (isNaN(nativeHeight) || nativeHeight <= 0)) {
-        res.status(400).json({ message: '세로 해상도가 올바르지 않습니다.' });
-        return;
-      }
+      const nativeWidth = parseOptionalInt(req.body.native_width);
+      const nativeHeight = parseOptionalInt(req.body.native_height);
 
       if (version && !SEMVER_RE.test(version)) {
-        res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
-        return;
+        res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' }); return;
       }
-
-      // zip 파일 검증 (게임 파일이 있을 때만)
       if (files?.game?.[0] && !validateZipFile(files.game[0])) {
-        res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' });
-        return;
+        res.status(400).json({ message: 'zip 파일만 업로드 가능합니다.' }); return;
       }
-
-      // 썸네일 타입 검증
       if (files?.thumbnail?.[0] && !ALLOWED_THUMBNAIL_TYPES.includes(files.thumbnail[0].mimetype)) {
-        res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' });
-        return;
+        res.status(400).json({ message: '썸네일은 jpeg, png, gif, webp만 가능합니다.' }); return;
       }
 
       const newVersion = version || bumpMinorVersion(currentVersion);
-
       const updates: string[] = ['current_version = $1'];
       const params: (string | number)[] = [newVersion];
 
-      if (description !== undefined) {
-        updates.push(`description = $${params.length + 1}`);
-        params.push(description);
-      }
-
-      if (nativeWidth !== undefined) {
-        updates.push(`native_width = $${params.length + 1}`);
-        // pool.query accepts null in practice despite the type; cast to satisfy TS
-        params.push(nativeWidth ?? (null as unknown as number));
-      }
-
-      if (nativeHeight !== undefined) {
-        updates.push(`native_height = $${params.length + 1}`);
-        params.push(nativeHeight ?? (null as unknown as number));
-      }
+      if (description !== undefined) { updates.push(`description = $${params.length + 1}`); params.push(description); }
+      if (nativeWidth !== undefined) { updates.push(`native_width = $${params.length + 1}`); params.push(nativeWidth ?? (null as unknown as number)); }
+      if (nativeHeight !== undefined) { updates.push(`native_height = $${params.length + 1}`); params.push(nativeHeight ?? (null as unknown as number)); }
 
       if (files?.thumbnail?.[0]) {
         const thumbnailKey = await uploadThumbnail(gameId, files.thumbnail[0].buffer, files.thumbnail[0].mimetype);
@@ -323,17 +338,26 @@ router.patch(
       }
 
       params.push(gameId);
-      await pool.query(
-        `UPDATE games SET ${updates.join(', ')} WHERE id = $${params.length}`,
-        params
-      );
+      await pool.query(`UPDATE games SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
 
-      if (files?.game?.[0]) {
+      if (gameType === 'webgl' && files?.game?.[0]) {
         const s3Prefix = await uploadGameZip(gameId, newVersion, files.game[0].buffer);
         await pool.query(
           'INSERT INTO game_versions (game_id, version, s3_prefix) VALUES ($1, $2, $3) ON CONFLICT (game_id, version) DO UPDATE SET s3_prefix = $3',
           [gameId, newVersion, s3Prefix]
         );
+      } else if (gameType === 'build') {
+        for (const os of SUPPORTED_OS) {
+          const f = files?.[`${os}_file`]?.[0];
+          if (!f) continue;
+          const s3Key = await uploadBuildFile(gameId, os, f.buffer, f.originalname);
+          await pool.query(
+            `INSERT INTO game_builds (game_id, os, s3_key, file_size, original_filename)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (game_id, os) DO UPDATE SET s3_key=$3, file_size=$4, original_filename=$5`,
+            [gameId, os, s3Key, f.size, f.originalname]
+          );
+        }
       }
 
       res.json({ message: '업데이트 완료', version: newVersion });

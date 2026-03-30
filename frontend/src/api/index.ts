@@ -17,7 +17,7 @@ export const logout = () => api.post('/auth/logout');
 export const getMe = () => api.get('/auth/me');
 
 // Games
-export const getGames = (params?: { search?: string; sort?: string; page?: number; limit?: number }) =>
+export const getGames = (params?: { search?: string; sort?: string; page?: number; limit?: number; game_type?: 'webgl' | 'build' }) =>
   api.get('/games', { params });
 
 export const getMyGames = () => api.get('/games/my');
@@ -29,6 +29,9 @@ export const uploadGame = (formData: FormData) =>
 
 export const updateGame = (id: number, formData: FormData) =>
   api.patch(`/games/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+
+export const getGameDownloadUrl = (gameId: number, os: 'windows' | 'mac' | 'linux') =>
+  api.get<{ url: string }>(`/games/${gameId}/download/${os}`);
 
 // Wishlist
 export const getWishlist = () => api.get('/wishlist');
