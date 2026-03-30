@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/jimmy0006/lu-diverse-frontend:sha-92d9503
+          image: ghcr.io/jimmy0006/lu-diverse-frontend:sha-148bb76
           ports:
             - containerPort: 80
           readinessProbe:
