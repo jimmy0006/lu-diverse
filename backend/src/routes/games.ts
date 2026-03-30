@@ -167,6 +167,9 @@ router.post(
     const version: string = req.body.version || '1.0.0';
     const files = req.files as Record<string, Express.Multer.File[]>;
 
+    const nativeWidth = req.body.native_width ? parseInt(req.body.native_width, 10) : null;
+    const nativeHeight = req.body.native_height ? parseInt(req.body.native_height, 10) : null;
+
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
       res.status(400).json({ message: '게임 제목은 필수입니다.' });
       return;
@@ -177,6 +180,14 @@ router.post(
     }
     if (!SEMVER_RE.test(version)) {
       res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
+      return;
+    }
+    if (nativeWidth !== null && (isNaN(nativeWidth) || nativeWidth <= 0)) {
+      res.status(400).json({ message: '가로 해상도가 올바르지 않습니다.' });
+      return;
+    }
+    if (nativeHeight !== null && (isNaN(nativeHeight) || nativeHeight <= 0)) {
+      res.status(400).json({ message: '세로 해상도가 올바르지 않습니다.' });
       return;
     }
 
@@ -194,9 +205,9 @@ router.post(
 
     try {
       const gameResult = await pool.query(
-        `INSERT INTO games (user_id, title, description, current_version)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [req.userId, title, description, version]
+        `INSERT INTO games (user_id, title, description, current_version, native_width, native_height)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [req.userId, title, description, version, nativeWidth, nativeHeight]
       );
       const gameId = gameResult.rows[0].id;
 
@@ -251,6 +262,22 @@ router.patch(
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { description, version } = req.body;
 
+      const nativeWidth = req.body.native_width !== undefined
+        ? (req.body.native_width === '' ? null : parseInt(req.body.native_width, 10))
+        : undefined;
+      const nativeHeight = req.body.native_height !== undefined
+        ? (req.body.native_height === '' ? null : parseInt(req.body.native_height, 10))
+        : undefined;
+
+      if (nativeWidth !== undefined && nativeWidth !== null && (isNaN(nativeWidth) || nativeWidth <= 0)) {
+        res.status(400).json({ message: '가로 해상도가 올바르지 않습니다.' });
+        return;
+      }
+      if (nativeHeight !== undefined && nativeHeight !== null && (isNaN(nativeHeight) || nativeHeight <= 0)) {
+        res.status(400).json({ message: '세로 해상도가 올바르지 않습니다.' });
+        return;
+      }
+
       if (version && !SEMVER_RE.test(version)) {
         res.status(400).json({ message: '버전은 x.y.z 형식이어야 합니다.' });
         return;
@@ -276,6 +303,17 @@ router.patch(
       if (description !== undefined) {
         updates.push(`description = $${params.length + 1}`);
         params.push(description);
+      }
+
+      if (nativeWidth !== undefined) {
+        updates.push(`native_width = $${params.length + 1}`);
+        // pool.query accepts null in practice despite the type; cast to satisfy TS
+        params.push(nativeWidth ?? (null as unknown as number));
+      }
+
+      if (nativeHeight !== undefined) {
+        updates.push(`native_height = $${params.length + 1}`);
+        params.push(nativeHeight ?? (null as unknown as number));
       }
 
       if (files?.thumbnail?.[0]) {

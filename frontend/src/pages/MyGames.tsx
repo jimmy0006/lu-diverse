@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getMyGames, updateGame } from '../api';
 
+const RESOLUTION_PRESETS = [
+  { label: '960×600', w: 960, h: 600 },
+  { label: '1280×720', w: 1280, h: 720 },
+  { label: '1920×1080', w: 1920, h: 1080 },
+  { label: '800×600', w: 800, h: 600 },
+  { label: '1024×768', w: 1024, h: 768 },
+];
+
 interface Game {
   id: number;
   title: string;
@@ -11,6 +19,8 @@ interface Game {
   view_count: number;
   wishlist_count: number;
   updated_at: string;
+  native_width: number | null;
+  native_height: number | null;
 }
 
 interface UpdateForm {
@@ -18,6 +28,8 @@ interface UpdateForm {
   version: string;
   gameFile: File | null;
   thumbnail: File | null;
+  nativeW: string;
+  nativeH: string;
 }
 
 export default function MyGames() {
@@ -25,7 +37,7 @@ export default function MyGames() {
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState<UpdateForm>({ description: '', version: '', gameFile: null, thumbnail: null });
+  const [form, setForm] = useState<UpdateForm>({ description: '', version: '', gameFile: null, thumbnail: null, nativeW: '', nativeH: '' });
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
 
@@ -38,7 +50,14 @@ export default function MyGames() {
 
   const startEdit = (game: Game) => {
     setEditingId(game.id);
-    setForm({ description: game.description || '', version: '', gameFile: null, thumbnail: null });
+    setForm({
+      description: game.description || '',
+      version: '',
+      gameFile: null,
+      thumbnail: null,
+      nativeW: game.native_width ? String(game.native_width) : '',
+      nativeH: game.native_height ? String(game.native_height) : '',
+    });
     setUpdateError('');
   };
 
@@ -50,6 +69,9 @@ export default function MyGames() {
     if (form.version) fd.append('version', form.version);
     if (form.gameFile) fd.append('game', form.gameFile);
     if (form.thumbnail) fd.append('thumbnail', form.thumbnail);
+    // 빈 문자열이면 null(초기화)로, 값이 있으면 해당 값으로 전송
+    fd.append('native_width', form.nativeW);
+    fd.append('native_height', form.nativeH);
 
     try {
       await updateGame(gameId, fd);
@@ -147,8 +169,8 @@ export default function MyGames() {
                       className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500 resize-none"
                     />
                   </div>
-                  <div className="flex gap-3">
-                    <div className="flex-1">
+                  <div className="flex gap-3 flex-wrap">
+                    <div className="flex-1 min-w-32">
                       <label className="block text-xs text-gray-400 mb-1">
                         새 버전 (비워두면 마이너 +1)
                       </label>
@@ -160,7 +182,7 @@ export default function MyGames() {
                         className="w-full bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
                       />
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-32">
                       <label className="block text-xs text-gray-400 mb-1">새 게임 파일 (zip)</label>
                       <input
                         type="file"
@@ -169,13 +191,56 @@ export default function MyGames() {
                         className="w-full text-sm text-gray-400"
                       />
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-32">
                       <label className="block text-xs text-gray-400 mb-1">새 썸네일</label>
                       <input
                         type="file"
                         accept="image/*"
                         onChange={(e) => setForm((f) => ({ ...f, thumbnail: e.target.files?.[0] || null }))}
                         className="w-full text-sm text-gray-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 해상도 수정 */}
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1.5">
+                      원본 해상도
+                      <span className="text-gray-600 ml-1">(비워두면 기존 값 유지)</span>
+                    </label>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {RESOLUTION_PRESETS.map((p) => (
+                        <button
+                          key={p.label}
+                          type="button"
+                          onClick={() => setForm((f) => ({ ...f, nativeW: String(p.w), nativeH: String(p.h) }))}
+                          className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                            form.nativeW === String(p.w) && form.nativeH === String(p.h)
+                              ? 'border-indigo-500 bg-indigo-900/50 text-indigo-300'
+                              : 'border-gray-600 text-gray-400 hover:border-gray-500'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={form.nativeW}
+                        onChange={(e) => setForm((f) => ({ ...f, nativeW: e.target.value }))}
+                        min={1}
+                        placeholder="가로"
+                        className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-gray-500 text-sm">×</span>
+                      <input
+                        type="number"
+                        value={form.nativeH}
+                        onChange={(e) => setForm((f) => ({ ...f, nativeH: e.target.value }))}
+                        min={1}
+                        placeholder="세로"
+                        className="w-24 bg-gray-700 text-white text-sm px-3 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                   </div>

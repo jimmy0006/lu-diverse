@@ -13,11 +13,17 @@ CREATE TABLE IF NOT EXISTS games (
   description TEXT,
   current_version VARCHAR(20) NOT NULL DEFAULT '1.0.0',
   thumbnail_s3_key TEXT,
+  native_width INT DEFAULT NULL,
+  native_height INT DEFAULT NULL,
   view_count INT NOT NULL DEFAULT 0,
   wishlist_count INT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- 기존 테이블에 해상도 컬럼이 없으면 추가 (멱등성)
+ALTER TABLE games ADD COLUMN IF NOT EXISTS native_width INT DEFAULT NULL;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS native_height INT DEFAULT NULL;
 
 CREATE TABLE IF NOT EXISTS game_versions (
   id SERIAL PRIMARY KEY,

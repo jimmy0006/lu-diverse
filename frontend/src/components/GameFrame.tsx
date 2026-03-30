@@ -4,6 +4,9 @@ import { recordPlaytime } from '../api';
 interface GameFrameProps {
   gameId: number;
   playUrl: string;
+  /** 게임 업로드 시 설정한 원본 해상도 (없으면 기본값 960×600 사용) */
+  initialNativeW?: number | null;
+  initialNativeH?: number | null;
 }
 
 const PRESETS = [
@@ -16,23 +19,26 @@ const PRESETS = [
 
 const MIN_FRAME = 200;
 
-export default function GameFrame({ gameId, playUrl }: GameFrameProps) {
+export default function GameFrame({ gameId, playUrl, initialNativeW, initialNativeH }: GameFrameProps) {
   // Playtime tracking
   const startTimeRef = useRef<number | null>(null);
   const activeRef = useRef(false);
 
+  const defaultNW = initialNativeW ?? 960;
+  const defaultNH = initialNativeH ?? 600;
+
   // Native game resolution (게임이 빌드된 원본 해상도)
-  const [nativeW, setNativeW] = useState(960);
-  const [nativeH, setNativeH] = useState(600);
+  const [nativeW, setNativeW] = useState(defaultNW);
+  const [nativeH, setNativeH] = useState(defaultNH);
 
   // Frame container size (사용자가 조절하는 프레임 크기)
-  const [frameW, setFrameW] = useState(960);
-  const [frameH, setFrameH] = useState(600);
+  const [frameW, setFrameW] = useState(defaultNW);
+  const [frameH, setFrameH] = useState(defaultNH);
 
   // Settings panel
   const [showSettings, setShowSettings] = useState(false);
-  const [inputW, setInputW] = useState('960');
-  const [inputH, setInputH] = useState('600');
+  const [inputW, setInputW] = useState(String(defaultNW));
+  const [inputH, setInputH] = useState(String(defaultNH));
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
@@ -40,9 +46,9 @@ export default function GameFrame({ gameId, playUrl }: GameFrameProps) {
 
   // 마운트 시 부모 너비에 맞게 초기 프레임 크기 설정
   useEffect(() => {
-    const parentW = wrapperRef.current?.parentElement?.clientWidth ?? 960;
-    const initW = Math.min(parentW, 960);
-    const initH = Math.round(initW * (600 / 960));
+    const parentW = wrapperRef.current?.parentElement?.clientWidth ?? defaultNW;
+    const initW = Math.min(parentW, defaultNW);
+    const initH = Math.round(initW * (defaultNH / defaultNW));
     setFrameW(initW);
     setFrameH(initH);
   }, []);

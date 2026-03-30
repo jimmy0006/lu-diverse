@@ -2,6 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { uploadGame } from '../api';
 
+const RESOLUTION_PRESETS = [
+  { label: '960 × 600', w: 960, h: 600 },
+  { label: '1280 × 720', w: 1280, h: 720 },
+  { label: '1920 × 1080', w: 1920, h: 1080 },
+  { label: '800 × 600', w: 800, h: 600 },
+  { label: '1024 × 768', w: 1024, h: 768 },
+];
+
 export default function Upload() {
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
@@ -9,9 +17,16 @@ export default function Upload() {
   const [version, setVersion] = useState('1.0.0');
   const [gameFile, setGameFile] = useState<File | null>(null);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
+  const [nativeW, setNativeW] = useState('');
+  const [nativeH, setNativeH] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [progress, setProgress] = useState(0);
+  const [showZipGuide, setShowZipGuide] = useState(false);
+
+  const handlePreset = (w: number, h: number) => {
+    setNativeW(String(w));
+    setNativeH(String(h));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +52,8 @@ export default function Upload() {
     formData.append('version', version);
     formData.append('game', gameFile);
     if (thumbnail) formData.append('thumbnail', thumbnail);
+    if (nativeW) formData.append('native_width', nativeW);
+    if (nativeH) formData.append('native_height', nativeH);
 
     try {
       const res = await uploadGame(formData);
@@ -46,7 +63,6 @@ export default function Upload() {
       setError(e?.response?.data?.message || '업로드에 실패했습니다.');
     } finally {
       setLoading(false);
-      setProgress(0);
     }
   };
 
@@ -55,6 +71,7 @@ export default function Upload() {
       <h1 className="text-2xl font-bold text-white mb-8">게임 업로드</h1>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+        {/* 제목 */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
             게임 제목 <span className="text-red-400">*</span>
@@ -68,6 +85,7 @@ export default function Upload() {
           />
         </div>
 
+        {/* 설명 */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">게임 설명</label>
           <textarea
@@ -79,6 +97,7 @@ export default function Upload() {
           />
         </div>
 
+        {/* 버전 */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">버전</label>
           <input
@@ -90,10 +109,69 @@ export default function Upload() {
           />
         </div>
 
+        {/* 원본 해상도 */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            썸네일 이미지
+            게임 원본 해상도
+            <span className="text-gray-500 font-normal ml-2">(선택사항 — Unity 빌드 설정의 해상도)</span>
           </label>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {RESOLUTION_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => handlePreset(p.w, p.h)}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition ${
+                  nativeW === String(p.w) && nativeH === String(p.h)
+                    ? 'border-indigo-500 bg-indigo-900/50 text-indigo-300'
+                    : 'border-gray-600 text-gray-400 hover:border-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            {(nativeW || nativeH) && (
+              <button
+                type="button"
+                onClick={() => { setNativeW(''); setNativeH(''); }}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-700 text-gray-500 hover:text-gray-300 transition"
+              >
+                초기화
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              value={nativeW}
+              onChange={(e) => setNativeW(e.target.value)}
+              min={1}
+              placeholder="가로 (px)"
+              className="w-32 bg-gray-800 text-white placeholder-gray-500 px-3 py-2 rounded-lg border border-gray-700 focus:outline-none focus:border-indigo-500 text-sm"
+            />
+            <span className="text-gray-500">×</span>
+            <input
+              type="number"
+              value={nativeH}
+              onChange={(e) => setNativeH(e.target.value)}
+              min={1}
+              placeholder="세로 (px)"
+              className="w-32 bg-gray-800 text-white placeholder-gray-500 px-3 py-2 rounded-lg border border-gray-700 focus:outline-none focus:border-indigo-500 text-sm"
+            />
+            {nativeW && nativeH && (
+              <span className="text-xs text-gray-500">
+                비율 {(parseInt(nativeW) / parseInt(nativeH)).toFixed(2)}:1
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-600 mt-1.5">
+            입력하지 않으면 기본값(960 × 600)이 사용되며, 플레이어가 플레이 중에 직접 변경할 수 있습니다.
+          </p>
+        </div>
+
+        {/* 썸네일 */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">썸네일 이미지</label>
           <div
             className="border-2 border-dashed border-gray-700 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500 transition"
             onClick={() => document.getElementById('thumbnail-input')?.click()}
@@ -113,10 +191,84 @@ export default function Upload() {
           />
         </div>
 
+        {/* 게임 파일 */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            게임 파일 <span className="text-red-400">*</span>
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-300">
+              게임 파일 (WebGL zip) <span className="text-red-400">*</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowZipGuide((v) => !v)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+              </svg>
+              zip 구성 방법
+            </button>
+          </div>
+
+          {/* WebGL zip 구조 가이드 */}
+          {showZipGuide && (
+            <div className="mb-3 bg-gray-900 border border-gray-700 rounded-xl p-4 text-xs text-gray-300 space-y-3">
+              <p className="font-semibold text-gray-200">Unity WebGL Build → zip 파일 구성 방법</p>
+
+              <div>
+                <p className="text-gray-400 mb-1.5">
+                  Unity에서 <strong className="text-white">File → Build Settings → WebGL → Build</strong>로 빌드하면
+                  아래 두 가지 구조 중 하나가 생성됩니다. <strong className="text-indigo-300">두 구조 모두 지원합니다.</strong>
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 구조 1 */}
+                <div className="bg-gray-800 rounded-lg p-3">
+                  <p className="text-indigo-300 font-medium mb-2">구조 A — 최상위 폴더 있음</p>
+                  <pre className="text-gray-400 leading-relaxed">{`MyGame.zip
+└── MyGame/          ← 최상위 폴더
+    ├── index.html
+    ├── Build/
+    │   ├── MyGame.loader.js
+    │   ├── MyGame.data
+    │   ├── MyGame.wasm
+    │   └── MyGame.framework.js
+    └── TemplateData/
+        └── style.css`}</pre>
+                </div>
+
+                {/* 구조 2 */}
+                <div className="bg-gray-800 rounded-lg p-3">
+                  <p className="text-indigo-300 font-medium mb-2">구조 B — 루트에 바로 파일</p>
+                  <pre className="text-gray-400 leading-relaxed">{`MyGame.zip
+├── index.html       ← 최상위에 바로 위치
+├── Build/
+│   ├── MyGame.loader.js
+│   ├── MyGame.data
+│   ├── MyGame.wasm
+│   └── MyGame.framework.js
+└── TemplateData/
+    └── style.css`}</pre>
+                </div>
+              </div>
+
+              <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-3 space-y-1">
+                <p className="text-yellow-300 font-medium">주의사항</p>
+                <ul className="text-gray-400 space-y-0.5 list-disc list-inside">
+                  <li>반드시 <strong className="text-white">index.html</strong>이 포함되어야 합니다.</li>
+                  <li>Brotli/GZip 압축 빌드도 지원합니다 (<code>.data.br</code>, <code>.wasm.br</code> 등).</li>
+                  <li>최대 파일 수: 500개 / 최대 압축 해제 크기: 3GB</li>
+                  <li>zip 파일 자체 크기: 최대 1GB</li>
+                </ul>
+              </div>
+
+              <p className="text-gray-500">
+                빌드 폴더 전체를 선택한 뒤 zip으로 압축하거나,
+                Unity 빌드 결과물 폴더를 그대로 압축하면 됩니다.
+              </p>
+            </div>
+          )}
+
           <div
             className="border-2 border-dashed border-gray-700 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500 transition"
             onClick={() => document.getElementById('game-input')?.click()}
@@ -148,21 +300,6 @@ export default function Upload() {
           <p className="text-red-400 text-sm bg-red-900/20 border border-red-800 rounded-lg px-4 py-2">
             {error}
           </p>
-        )}
-
-        {loading && progress > 0 && (
-          <div>
-            <div className="flex justify-between text-sm text-gray-400 mb-1">
-              <span>업로드 중...</span>
-              <span>{progress}%</span>
-            </div>
-            <div className="w-full bg-gray-700 rounded-full h-1.5">
-              <div
-                className="bg-indigo-500 h-1.5 rounded-full transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
         )}
 
         <button

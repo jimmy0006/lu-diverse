@@ -22,6 +22,8 @@ interface GameDetail {
   uploader: string;
   created_at: string;
   updated_at: string;
+  native_width: number | null;
+  native_height: number | null;
 }
 
 export default function GamePlay() {
@@ -99,7 +101,12 @@ export default function GamePlay() {
 
       {/* 게임 프레임 */}
       {playUrl ? (
-        <GameFrame gameId={game.id} playUrl={playUrl} />
+        <GameFrame
+          gameId={game.id}
+          playUrl={playUrl}
+          initialNativeW={game.native_width}
+          initialNativeH={game.native_height}
+        />
       ) : (
         <div className="w-full h-64 bg-gray-800 rounded-xl flex items-center justify-center text-gray-500">
           게임 파일을 불러올 수 없습니다.
