@@ -55,19 +55,28 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
   if (sort === 'latest') orderBy = 'g.created_at DESC';
   if (sort === 'wishlist') orderBy = 'g.wishlist_count DESC';
 
-  const conditions: string[] = [];
-  const params: (string | number)[] = [limitRaw, offset];
+  // 메인 쿼리: $1=limit, $2=offset, 이후 필터 파라미터
+  const listParams: (string | number)[] = [limitRaw, offset];
+  // count 쿼리: $1부터 필터 파라미터만 (limit/offset 불필요)
+  const countParams: (string | number)[] = [];
+  const listConditions: string[] = [];
+  const countConditions: string[] = [];
 
   if (game_type === 'webgl' || game_type === 'build') {
-    conditions.push(`g.game_type = $${params.length + 1}`);
-    params.push(game_type);
+    listConditions.push(`g.game_type = $${listParams.length + 1}`);
+    listParams.push(game_type);
+    countConditions.push(`g.game_type = $${countParams.length + 1}`);
+    countParams.push(game_type);
   }
   if (search) {
-    conditions.push(`(g.title ILIKE $${params.length + 1} OR g.description ILIKE $${params.length + 1})`);
-    params.push(`%${search}%`);
+    listConditions.push(`(g.title ILIKE $${listParams.length + 1} OR g.description ILIKE $${listParams.length + 1})`);
+    listParams.push(`%${search}%`);
+    countConditions.push(`(g.title ILIKE $${countParams.length + 1} OR g.description ILIKE $${countParams.length + 1})`);
+    countParams.push(`%${search}%`);
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereClause = listConditions.length > 0 ? `WHERE ${listConditions.join(' AND ')}` : '';
+  const countWhereClause = countConditions.length > 0 ? `WHERE ${countConditions.join(' AND ')}` : '';
 
   try {
     const result = await pool.query(
@@ -78,12 +87,11 @@ router.get('/', optionalAuth, async (req: AuthRequest, res: Response): Promise<v
        ${whereClause}
        ORDER BY ${orderBy}
        LIMIT $1 OFFSET $2`,
-      params
+      listParams
     );
 
-    const countParams = params.slice(2);
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM games g ${whereClause.replace('LIMIT $1 OFFSET $2', '')}`,
+      `SELECT COUNT(*) FROM games g JOIN users u ON g.user_id = u.id ${countWhereClause}`,
       countParams
     );
 
