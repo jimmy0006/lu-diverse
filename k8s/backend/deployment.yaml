@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: ghcr.io/jimmy0006/lu-diverse-backend:sha-92d9503
+          image: ghcr.io/jimmy0006/lu-diverse-backend:sha-148bb76
           ports:
             - containerPort: 4000
           env:
